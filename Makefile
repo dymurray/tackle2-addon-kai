@@ -1,21 +1,20 @@
 GOPATH    ?= $(HOME)/go
 GOBIN     ?= $(GOPATH)/bin
 GOIMPORTS = $(GOBIN)/goimports
-CMD       ?= bin/addon
-IMG       ?= quay.io/dymurray/tackle2-addon-kai:latest
+IMG       ?= quay.io/djzager/tackle2-addon-kai:latest
 
 PKG = ./cmd/...
 PKGDIR = $(subst /...,,$(PKG))
 
-
 cmd: fmt vet
-	go build -ldflags="-w -s" -o ${CMD} github.com/dymurray/tackle2-addon-kai/cmd
+	go build -ldflags="-w -s" -o bin/addon ./cmd/addon
+	go build -ldflags="-w -s" -o bin/fetch-analysis ./cmd/fetch-analysis
 
 image-docker:
-	docker build -t ${IMG} .
+	docker build -t $(IMG) .
 
 image-podman:
-	podman build -t ${IMG} .
+	podman build -t $(IMG) .
 
 fmt: $(GOIMPORTS)
 	$(GOIMPORTS) -w $(PKGDIR)

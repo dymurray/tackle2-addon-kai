@@ -1,0 +1,27 @@
+---
+apiVersion: tackle.konveyor.io/v1alpha1
+kind: Task
+metadata:
+  name: migration
+  namespace: konveyor-tackle
+spec:
+  priority: 10
+---
+apiVersion: tackle.konveyor.io/v1alpha1
+kind: Addon
+metadata:
+  name: kai
+  namespace: konveyor-tackle
+spec:
+  container:
+    image: quay.io/djzager/tackle2-addon-kai:latest
+    imagePullPolicy: Always
+    name: addon
+    resources:
+      limits:
+        cpu: "2"
+        memory: 2Gi
+      requests:
+        cpu: "1"
+        memory: 1Gi
+  task: migration
