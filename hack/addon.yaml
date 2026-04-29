@@ -11,7 +11,7 @@ apiVersion: tackle.konveyor.io/v1alpha1
 kind: Addon
 metadata:
   name: kai
-  namespace: konveyor-tackle
+  namespace: openshift-mta
 spec:
   container:
     image: quay.io/dymurray/tackle2-addon-kai:latest
