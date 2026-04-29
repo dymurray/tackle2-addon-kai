@@ -28,7 +28,7 @@ ARG OPENCODE_VERSION=0.0.55
 ARG PALLET_VERSION=0.0.5
 RUN microdnf -y install bzip2 && \
     curl -fsSL -L "https://github.com/block/goose/releases/download/v${GOOSE_VERSION}/goose-x86_64-unknown-linux-gnu.tar.bz2" \
-      | tar -xj -C /usr/bin goose && \
+      | tar -xj -C /usr/bin --strip-components=1 && \
     curl -fsSL -L "https://github.com/opencode-ai/opencode/releases/download/v${OPENCODE_VERSION}/opencode-linux-x86_64.tar.gz" \
       | tar -xz -C /usr/bin opencode && \
     curl -fsSL -L "https://github.com/djzager/pallet/releases/download/v${PALLET_VERSION}/pallet-linux-amd64" \
