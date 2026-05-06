@@ -258,6 +258,10 @@ func runGoose(provider, model string, hubEnv []string, planFile string) error {
 		"run",
 		"--no-profile",
 		"--no-session",
+		// `developer` provides file read/write/edit and shell exec — without
+		// at least one extension goose has no tools and exits with an "I notice
+		// that no extensions are currently enabled" apology.
+		"--with-builtin", "developer",
 		"-i", planFile,
 	}
 	if provider != "" {
@@ -266,8 +270,13 @@ func runGoose(provider, model string, hubEnv []string, planFile string) error {
 	if model != "" {
 		args = append(args, "--model", model)
 	}
-	// GOOSE_MODE=auto auto-approves tool calls so goose runs non-interactively.
-	env := append([]string{"GOOSE_MODE=auto"}, hubEnv...)
+	env := append([]string{
+		// Auto-approve tool calls (no human in the loop).
+		"GOOSE_MODE=auto",
+		// Plain output for the pod log: no ANSI colors, no in-place TUI.
+		"NO_COLOR=1",
+		"TERM=dumb",
+	}, hubEnv...)
 	return run(SourceDir, env, GooseBin, args...)
 }
 
