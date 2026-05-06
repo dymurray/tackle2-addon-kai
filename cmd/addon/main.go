@@ -241,7 +241,9 @@ func runGoose(provider, model string, hubEnv []string, planFile string) error {
 	if model != "" {
 		args = append(args, "--model", model)
 	}
-	return run(SourceDir, hubEnv, GooseBin, args...)
+	// GOOSE_MODE=auto auto-approves tool calls so goose runs non-interactively.
+	env := append([]string{"GOOSE_MODE=auto"}, hubEnv...)
+	return run(SourceDir, env, GooseBin, args...)
 }
 
 func runOpenCode(model string, hubEnv []string, planFile string) error {
