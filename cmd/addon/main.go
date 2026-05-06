@@ -234,7 +234,6 @@ func runGoose(provider, model string, hubEnv []string, planFile string) error {
 		"--no-profile",
 		"--no-session",
 		"-i", planFile,
-		"-q",
 	}
 	if provider != "" {
 		args = append(args, "--provider", provider)
