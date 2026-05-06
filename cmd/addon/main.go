@@ -7,7 +7,6 @@ import (
 	"path"
 	"strings"
 
-	"github.com/konveyor/tackle2-addon/repository"
 	"github.com/konveyor/tackle2-addon/ssh"
 	hub "github.com/konveyor/tackle2-hub/addon"
 )
@@ -16,21 +15,36 @@ var (
 	addon     = hub.Addon
 	Dir       = ""
 	SourceDir = ""
-	Source    = "Kai"
 
 	PalletBin = "/usr/bin/pallet"
 	GooseBin  = "/usr/bin/goose"
-	SkillsDir = "/addon/skills"
 )
 
-// Data matches the TaskGroup data shape sent by the tackle2-ui migrate modal.
+// Data matches the TaskGroup data shape sent by the tackle2-ui migrate modal
+// for kind "migration".
 type Data struct {
-	MigrationTarget string        `json:"migrationTarget,omitempty"`
-	Pallet          *PalletConfig `json:"pallet,omitempty"`
+	Agent  AgentConfig `json:"agent"`
+	Plan   PlanConfig  `json:"plan"`
+	Branch string      `json:"branch"`
+}
 
-	// Legacy: kept for compatibility with existing tackle2-addon repository fetch
-	Repository repository.SCM `json:"repository,omitempty"`
-	Source     string         `json:"source,omitempty"`
+type AgentConfig struct {
+	Name        string            `json:"name"`
+	Description string            `json:"description,omitempty"`
+	Pallet      *PalletConfig     `json:"pallet,omitempty"`
+	ModelConfig *AgentModelConfig `json:"modelConfig,omitempty"`
+}
+
+type AgentModelConfig struct {
+	ProviderType string `json:"provider_type,omitempty"`
+	URL          string `json:"url,omitempty"`
+	Model        string `json:"model,omitempty"`
+	APIKey       string `json:"api_key,omitempty"`
+}
+
+type PlanConfig struct {
+	Name     string `json:"name"`
+	Markdown string `json:"markdown"`
 }
 
 type PalletConfig struct {
@@ -49,14 +63,6 @@ func init() {
 	SourceDir = path.Join(Dir, "source")
 }
 
-// env returns the value of the named environment variable, or fallback if unset.
-func env(name, fallback string) string {
-	if v := os.Getenv(name); v != "" {
-		return v
-	}
-	return fallback
-}
-
 func main() {
 	addon.Run(func() (err error) {
 		d := &Data{}
@@ -64,51 +70,62 @@ func main() {
 		if err != nil {
 			return
 		}
-		if d.Source == "" {
-			d.Source = Source
+		if strings.TrimSpace(d.Branch) == "" {
+			return fmt.Errorf("data.branch is required")
 		}
 
-		// Agent config comes from the kai-config secret (env vars).
-		agentName := env("KAI_AGENT", "goose")
-		provider := os.Getenv("KAI_PROVIDER")
-		model := os.Getenv("KAI_MODEL")
+		// Provider/model: payload first, env vars as fallback.
+		var provider, model string
+		if d.Agent.ModelConfig != nil {
+			provider = d.Agent.ModelConfig.ProviderType
+			model = d.Agent.ModelConfig.Model
+		}
+		if provider == "" {
+			provider = os.Getenv("KAI_PROVIDER")
+		}
+		if model == "" {
+			model = os.Getenv("KAI_MODEL")
+		}
+		agentName := os.Getenv("KAI_AGENT")
+		if agentName == "" {
+			agentName = "goose"
+		}
 
-		//
-		// Fetch application.
 		addon.Activity("Fetching application.")
 		application, err := addon.Task.Application()
 		if err != nil {
 			return
 		}
 
-		// SSH agent
-		agent := ssh.Agent{}
-		err = agent.Start()
+		sshAgent := ssh.Agent{}
+		err = sshAgent.Start()
 		if err != nil {
 			return
 		}
 
-		// Clone from application.Repository.
 		addon.Activity("Cloning repository.")
 		err = FetchRepository(application)
 		if err != nil {
 			return
 		}
 
-		// Write pallet.yaml into the workspace if the UI provided pallet config.
-		if d.Pallet != nil && d.Pallet.YAML != "" {
+		// Write pallet.yaml into the workspace if the agent carries pallet config.
+		if d.Agent.Pallet != nil && d.Agent.Pallet.YAML != "" {
 			palletPath := path.Join(SourceDir, "pallet.yaml")
-			err = os.WriteFile(palletPath, []byte(d.Pallet.YAML), 0644)
-			if err != nil {
+			if err = os.WriteFile(palletPath, []byte(d.Agent.Pallet.YAML), 0644); err != nil {
 				return fmt.Errorf("writing pallet.yaml: %w", err)
 			}
 		}
 
-		// Sync skills into the workspace via pallet.
 		addon.Activity("Syncing skills.")
-		err = PalletSync(SourceDir)
-		if err != nil {
-			addon.Activity("Pallet sync skipped: %v", err)
+		if syncErr := PalletSync(SourceDir); syncErr != nil {
+			addon.Activity("Pallet sync skipped: %v", syncErr)
+		}
+
+		// Write the user's plan markdown into the workspace.
+		planPath := path.Join(SourceDir, ".kai-plan.md")
+		if err = os.WriteFile(planPath, []byte(d.Plan.Markdown), 0644); err != nil {
+			return fmt.Errorf("writing plan markdown: %w", err)
 		}
 
 		// Environment for the agent subprocess so fetch-analysis can reach the Hub.
@@ -117,32 +134,48 @@ func main() {
 			fmt.Sprintf("HUB_TOKEN=%s", os.Getenv("TOKEN")),
 			fmt.Sprintf("APP_ID=%d", application.ID),
 		}
-		if d.MigrationTarget != "" {
-			hubEnv = append(hubEnv, fmt.Sprintf("MIGRATION_TARGET=%s", d.MigrationTarget))
-		}
 
-		// Run the AI agent.
-		addon.Activity("Running migration agent (%s).", agentName)
-		skillFile := path.Join(SkillsDir, "migration", "SKILL.md")
-		err = RunAgent(agentName, provider, model, hubEnv, skillFile)
+		addon.Activity("Running migration agent (%s) on plan %q.", agentName, d.Plan.Name)
+		err = RunAgent(agentName, provider, model, hubEnv, planPath)
 		if err != nil {
 			return
 		}
 
-		// Push results to source repo on a new branch.
-		// Branch name: <migrator-task-name>-<task-id> to avoid conflicts.
-		taskID := os.Getenv("TASK")
-		branchName := fmt.Sprintf("konveyor-migration/%s-%s",
-			sanitize(application.Name), taskID)
-		addon.Activity("Pushing migration branch.")
-		err = PushBranch(SourceDir, branchName)
+		addon.Activity("Pushing migration to branch %s.", d.Branch)
+		err = PushBranch(SourceDir, d.Branch)
 		if err != nil {
 			return
 		}
 
-		addon.Activity("Migration complete. Branch: %s", branchName)
+		addon.Activity("Migration complete. Branch: %s", d.Branch)
 		return
 	})
+}
+
+// run executes a command with full logging: the exact argv, the working dir,
+// and the exit code on failure. Stdout/stderr are streamed to the addon's
+// process output so the Hub captures them on the task's activity log.
+func run(workDir string, env []string, name string, args ...string) error {
+	addon.Activity("$ %s %s  (cwd=%s)", name, strings.Join(args, " "), workDir)
+	cmd := exec.Command(name, args...)
+	cmd.Dir = workDir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
+	err := cmd.Run()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			addon.Activity("command failed: %s %s — exit %d",
+				name, strings.Join(args, " "), ee.ExitCode())
+		} else {
+			addon.Activity("command failed: %s %s — %v",
+				name, strings.Join(args, " "), err)
+		}
+		return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
+	}
+	return nil
 }
 
 // PalletSync runs `pallet sync .` in the workspace directory.
@@ -150,29 +183,25 @@ func PalletSync(workDir string) error {
 	if _, err := os.Stat(PalletBin); os.IsNotExist(err) {
 		return fmt.Errorf("pallet binary not found at %s", PalletBin)
 	}
-	cmd := exec.Command(PalletBin, "sync", ".")
-	cmd.Dir = workDir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	return run(workDir, nil, PalletBin, "sync", ".")
 }
 
-// RunAgent executes goose or opencode with the migration skill.
-func RunAgent(agentName, provider, model string, hubEnv []string, skillFile string) error {
+// RunAgent executes goose or opencode against the user's plan markdown.
+func RunAgent(agentName, provider, model string, hubEnv []string, planFile string) error {
 	switch strings.ToLower(agentName) {
 	case "opencode":
-		return runOpenCode(model, hubEnv, skillFile)
+		return runOpenCode(model, hubEnv, planFile)
 	default:
-		return runGoose(provider, model, hubEnv, skillFile)
+		return runGoose(provider, model, hubEnv, planFile)
 	}
 }
 
-func runGoose(provider, model string, hubEnv []string, skillFile string) error {
+func runGoose(provider, model string, hubEnv []string, planFile string) error {
 	args := []string{
 		"run",
 		"--no-profile",
 		"--no-session",
-		"-i", skillFile,
+		"-i", planFile,
 		"-q",
 	}
 	if provider != "" {
@@ -181,21 +210,14 @@ func runGoose(provider, model string, hubEnv []string, skillFile string) error {
 	if model != "" {
 		args = append(args, "--model", model)
 	}
-
-	cmd := exec.Command(GooseBin, args...)
-	cmd.Dir = SourceDir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Env = append(os.Environ(), hubEnv...)
-	return cmd.Run()
+	return run(SourceDir, hubEnv, GooseBin, args...)
 }
 
-func runOpenCode(model string, hubEnv []string, skillFile string) error {
-	prompt, err := os.ReadFile(skillFile)
+func runOpenCode(model string, hubEnv []string, planFile string) error {
+	prompt, err := os.ReadFile(planFile)
 	if err != nil {
-		return fmt.Errorf("reading skill file: %w", err)
+		return fmt.Errorf("reading plan file: %w", err)
 	}
-
 	args := []string{
 		"run",
 		"--dangerously-skip-permissions",
@@ -204,37 +226,25 @@ func runOpenCode(model string, hubEnv []string, skillFile string) error {
 	if model != "" {
 		args = append(args, "--model", model)
 	}
-
-	cmd := exec.Command("opencode", args...)
-	cmd.Dir = SourceDir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Env = append(os.Environ(), hubEnv...)
-	return cmd.Run()
+	return run(SourceDir, hubEnv, "opencode", args...)
 }
 
-// PushBranch creates a new branch, commits all changes, and pushes.
+// PushBranch creates the user-supplied branch, commits all changes, and pushes.
+// Diagnostics (remote, HEAD, GIT_TRACE) are emitted so push failures (e.g. the
+// classic exit 128) carry enough context to debug from the activity log.
 func PushBranch(repoDir, branchName string) error {
-	commands := [][]string{
-		{"git", "checkout", "-b", branchName},
-		{"git", "add", "-A"},
-		{"git", "commit", "-m", fmt.Sprintf("konveyor: automated migration\n\nBranch: %s", branchName)},
-		{"git", "push", "origin", branchName},
-	}
-	for _, c := range commands {
-		cmd := exec.Command(c[0], c[1:]...)
-		cmd.Dir = repoDir
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("running %s: %w", strings.Join(c, " "), err)
-		}
-	}
-	return nil
-}
+	_ = run(repoDir, nil, "git", "remote", "-v")
+	_ = run(repoDir, nil, "git", "rev-parse", "HEAD")
 
-// sanitize makes a string safe for use in a branch name.
-func sanitize(s string) string {
-	r := strings.NewReplacer(" ", "-", "/", "-", "\\", "-")
-	return strings.ToLower(r.Replace(s))
+	if err := run(repoDir, nil, "git", "checkout", "-b", branchName); err != nil {
+		return err
+	}
+	if err := run(repoDir, nil, "git", "add", "-A"); err != nil {
+		return err
+	}
+	if err := run(repoDir, nil, "git", "commit", "-m", "konveyor: automated migration"); err != nil {
+		return err
+	}
+	gitEnv := []string{"GIT_TRACE=1", "GIT_CURL_VERBOSE=1"}
+	return run(repoDir, gitEnv, "git", "push", "--verbose", "--set-upstream", "origin", branchName)
 }
