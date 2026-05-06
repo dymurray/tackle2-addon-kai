@@ -9,6 +9,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/konveyor/tackle2-addon/repository"
 	"github.com/konveyor/tackle2-addon/ssh"
 	hub "github.com/konveyor/tackle2-hub/addon"
 )
@@ -106,7 +107,8 @@ func main() {
 		}
 
 		addon.Activity("Cloning repository.")
-		err = FetchRepository(application)
+		var rp repository.SCM
+		rp, err = FetchRepository(application)
 		if err != nil {
 			return
 		}
@@ -156,8 +158,13 @@ func main() {
 			return
 		}
 
-		addon.Activity("Pushing migration to branch %s.", d.Branch)
-		err = PushBranch(SourceDir, d.Branch)
+		addon.Activity("Switching to branch %s.", d.Branch)
+		err = rp.Branch(d.Branch)
+		if err != nil {
+			return
+		}
+		addon.Activity("Committing and pushing migration to branch %s.", d.Branch)
+		err = rp.Commit([]string{"."}, "konveyor: automated migration")
 		if err != nil {
 			return
 		}
@@ -254,22 +261,3 @@ func runOpenCode(model string, hubEnv []string, planFile string) error {
 	return run(SourceDir, hubEnv, "opencode", args...)
 }
 
-// PushBranch creates the user-supplied branch, commits all changes, and pushes.
-// Diagnostics (remote, HEAD, GIT_TRACE) are emitted so push failures (e.g. the
-// classic exit 128) carry enough context to debug from the activity log.
-func PushBranch(repoDir, branchName string) error {
-	_ = run(repoDir, nil, "git", "remote", "-v")
-	_ = run(repoDir, nil, "git", "rev-parse", "HEAD")
-
-	if err := run(repoDir, nil, "git", "checkout", "-b", branchName); err != nil {
-		return err
-	}
-	if err := run(repoDir, nil, "git", "add", "-A"); err != nil {
-		return err
-	}
-	if err := run(repoDir, nil, "git", "commit", "-m", "konveyor: automated migration"); err != nil {
-		return err
-	}
-	gitEnv := []string{"GIT_TRACE=1", "GIT_CURL_VERBOSE=1"}
-	return run(repoDir, gitEnv, "git", "push", "--verbose", "--set-upstream", "origin", branchName)
-}

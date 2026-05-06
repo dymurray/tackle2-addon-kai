@@ -9,8 +9,9 @@ import (
 	"github.com/konveyor/tackle2-hub/api"
 )
 
-// FetchRepository gets SCM repository.
-func FetchRepository(application *api.Application) (err error) {
+// FetchRepository clones the application's SCM repository and returns the
+// repository.SCM handle so callers can reuse it for Branch/Commit/push.
+func FetchRepository(application *api.Application) (rp repository.SCM, err error) {
 	if application.Repository == nil {
 		err = errors.New("application repository not defined")
 		return
@@ -33,7 +34,6 @@ func FetchRepository(application *api.Application) (err error) {
 			path.Base(
 				application.Repository.URL),
 			".")[0])
-	var rp repository.SCM
 	rp, err = repository.New(
 		SourceDir,
 		application.Repository,
