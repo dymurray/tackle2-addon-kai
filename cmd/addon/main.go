@@ -23,6 +23,26 @@ var (
 	GooseBin  = "/usr/bin/goose"
 )
 
+// nonInteractivePreamble is prepended to every plan before it is handed to the
+// AI agent. It tells the model there is no human in the loop — without this
+// the model will sometimes end its response with a clarifying question, which
+// causes `goose run -i` to exit without completing the migration.
+const nonInteractivePreamble = `# Execution context (not part of the user plan)
+
+You are running in a non-interactive automated environment. There is no human available to answer questions.
+
+- Do NOT ask clarifying questions. Make reasonable assumptions and proceed.
+- Do NOT request confirmation before taking actions. Execute directly.
+- Do NOT propose multiple options for the user to pick from. Pick the best one and continue.
+- Complete every step of the plan autonomously, then end with a brief summary of what you did.
+
+---
+
+# User plan
+
+`
+
+
 // Data matches the TaskGroup data shape sent by the tackle2-ui migrate modal
 // for kind "migration".
 type Data struct {
@@ -130,15 +150,20 @@ func main() {
 			addon.Activity("Pallet sync skipped: %v", syncErr)
 		}
 
-		// Write the user's plan markdown into the workspace.
+		// Write the user's plan markdown into the workspace, prefixed with a
+		// non-interactive preamble. `goose run -i <file>` exits as soon as the
+		// model's response ends, so a plan that elicits a clarifying question
+		// from the model causes the whole task to exit without doing the work.
+		// The preamble tells the model up front that no human is available.
 		planPath := path.Join(SourceDir, ".kai-plan.md")
 		if strings.TrimSpace(d.Plan.Markdown) == "" {
 			addon.Activity("WARNING: plan markdown is empty (plan name=%q). Goose will run with no instructions.",
 				d.Plan.Name)
 		}
-		addon.Activity("Writing plan %q to %s (%d bytes).",
-			d.Plan.Name, planPath, len(d.Plan.Markdown))
-		if err = os.WriteFile(planPath, []byte(d.Plan.Markdown), 0644); err != nil {
+		planBody := nonInteractivePreamble + d.Plan.Markdown
+		addon.Activity("Writing plan %q to %s (%d bytes user content + %d bytes preamble).",
+			d.Plan.Name, planPath, len(d.Plan.Markdown), len(nonInteractivePreamble))
+		if err = os.WriteFile(planPath, []byte(planBody), 0644); err != nil {
 			return fmt.Errorf("writing plan markdown: %w", err)
 		}
 		if info, statErr := os.Stat(planPath); statErr == nil {
