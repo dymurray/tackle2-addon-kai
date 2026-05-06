@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path"
@@ -112,9 +114,13 @@ func main() {
 		// Write pallet.yaml into the workspace if the agent carries pallet config.
 		if d.Agent.Pallet != nil && d.Agent.Pallet.YAML != "" {
 			palletPath := path.Join(SourceDir, "pallet.yaml")
+			addon.Activity("Writing pallet.yaml to %s (%d bytes).",
+				palletPath, len(d.Agent.Pallet.YAML))
 			if err = os.WriteFile(palletPath, []byte(d.Agent.Pallet.YAML), 0644); err != nil {
 				return fmt.Errorf("writing pallet.yaml: %w", err)
 			}
+		} else {
+			addon.Activity("No pallet config provided in agent payload; skipping pallet.yaml write.")
 		}
 
 		addon.Activity("Syncing skills.")
@@ -124,8 +130,17 @@ func main() {
 
 		// Write the user's plan markdown into the workspace.
 		planPath := path.Join(SourceDir, ".kai-plan.md")
+		if strings.TrimSpace(d.Plan.Markdown) == "" {
+			addon.Activity("WARNING: plan markdown is empty (plan name=%q). Goose will run with no instructions.",
+				d.Plan.Name)
+		}
+		addon.Activity("Writing plan %q to %s (%d bytes).",
+			d.Plan.Name, planPath, len(d.Plan.Markdown))
 		if err = os.WriteFile(planPath, []byte(d.Plan.Markdown), 0644); err != nil {
 			return fmt.Errorf("writing plan markdown: %w", err)
+		}
+		if info, statErr := os.Stat(planPath); statErr == nil {
+			addon.Activity("Plan written: %s (%d bytes on disk).", planPath, info.Size())
 		}
 
 		// Environment for the agent subprocess so fetch-analysis can reach the Hub.
@@ -153,19 +168,29 @@ func main() {
 }
 
 // run executes a command with full logging: the exact argv, the working dir,
-// and the exit code on failure. Stdout/stderr are streamed to the addon's
-// process output so the Hub captures them on the task's activity log.
+// the exit code on failure, and a tail of combined stdout+stderr on failure.
+// Stdout/stderr are still streamed to the addon's process output, so pod logs
+// keep the full output, while the task's activity log gets enough to debug.
 func run(workDir string, env []string, name string, args ...string) error {
 	addon.Activity("$ %s %s  (cwd=%s)", name, strings.Join(args, " "), workDir)
 	cmd := exec.Command(name, args...)
 	cmd.Dir = workDir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	var capture bytes.Buffer
+	cmd.Stdout = io.MultiWriter(os.Stdout, &capture)
+	cmd.Stderr = io.MultiWriter(os.Stderr, &capture)
 	if len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)
 	}
 	err := cmd.Run()
 	if err != nil {
+		const maxTail = 4096
+		out := capture.Bytes()
+		if len(out) > maxTail {
+			out = out[len(out)-maxTail:]
+		}
+		if len(out) > 0 {
+			addon.Activity("output (last %d bytes):\n%s", len(out), string(out))
+		}
 		if ee, ok := err.(*exec.ExitError); ok {
 			addon.Activity("command failed: %s %s — exit %d",
 				name, strings.Join(args, " "), ee.ExitCode())
