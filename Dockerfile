@@ -18,7 +18,8 @@ RUN microdnf -y install \
  openssh-clients \
  subversion \
  git \
- tar
+ tar \
+ libxcb
 RUN sed -i 's/^LANG=.*/LANG="en_US.utf8"/' /etc/locale.conf
 ENV LANG=en_US.utf8
 
