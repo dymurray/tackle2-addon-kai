@@ -23,9 +23,15 @@ RUN cargo build --release --target x86_64-unknown-linux-musl
 FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
 
 # System packages
-RUN echo -e "[centos9]" \
- "\nname = centos9" \
+RUN echo -e "[centos9-appstream]" \
+ "\nname = CentOS Stream 9 - AppStream" \
  "\nbaseurl = http://mirror.stream.centos.org/9-stream/AppStream/\$basearch/os/" \
+ "\nenabled = 1" \
+ "\ngpgcheck = 0" \
+ "\n" \
+ "\n[centos9-baseos]" \
+ "\nname = CentOS Stream 9 - BaseOS" \
+ "\nbaseurl = http://mirror.stream.centos.org/9-stream/BaseOS/\$basearch/os/" \
  "\nenabled = 1" \
  "\ngpgcheck = 0" > /etc/yum.repos.d/centos.repo
 RUN microdnf -y install \
@@ -34,9 +40,35 @@ RUN microdnf -y install \
  subversion \
  git \
  tar \
- libxcb
+ libxcb \
+ gcc \
+ gcc-c++ \
+ make \
+ patch \
+ go-toolset \
+ nodejs \
+ npm \
+ python3 \
+ python3-pip \
+ python3-devel \
+ python3-setuptools \
+ java-17-openjdk-devel \
+ maven \
+ dotnet-sdk-8.0 \
+ rust \
+ cargo \
+ && microdnf clean all
 RUN sed -i 's/^LANG=.*/LANG="en_US.utf8"/' /etc/locale.conf
 ENV LANG=en_US.utf8
+
+# TypeScript (via npm) and Python convenience symlink
+RUN npm install -g typescript && \
+    ln -sf /usr/bin/python3 /usr/bin/python
+
+# Language toolchain environment
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
+ENV DOTNET_NOLOGO=1
 
 # Install goose and opencode from release binaries; pallet comes from
 # the pallet-builder stage (built static against musl).
