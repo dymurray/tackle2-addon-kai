@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/konveyor/tackle2-addon/repository"
@@ -23,11 +26,11 @@ var (
 	GooseBin  = "/usr/bin/goose"
 )
 
-// nonInteractivePreamble is prepended to every plan before it is handed to the
-// AI agent. It tells the model there is no human in the loop — without this
-// the model will sometimes end its response with a clarifying question, which
+// preambleIntro is prepended to every plan before it is handed to the AI
+// agent. It tells the model there is no human in the loop — without this the
+// model will sometimes end its response with a clarifying question, which
 // causes `goose run -i` to exit without completing the migration.
-const nonInteractivePreamble = `# Execution context (not part of the user plan)
+const preambleIntro = `# Execution context (not part of the user plan)
 
 You are running in a non-interactive automated environment. There is no human available to answer questions.
 
@@ -36,12 +39,15 @@ You are running in a non-interactive automated environment. There is no human av
 - Do NOT propose multiple options for the user to pick from. Pick the best one and continue.
 - Complete every step of the plan autonomously, then end with a brief summary of what you did.
 
----
+`
+
+// userPlanHeader separates the execution-context preamble (and any synced
+// asset manifest) from the user plan body.
+const userPlanHeader = `---
 
 # User plan
 
 `
-
 
 // Data matches the TaskGroup data shape sent by the tackle2-ui migrate modal
 // for kind "migration".
@@ -160,9 +166,13 @@ func main() {
 			addon.Activity("WARNING: plan markdown is empty (plan name=%q). Goose will run with no instructions.",
 				d.Plan.Name)
 		}
-		planBody := nonInteractivePreamble + d.Plan.Markdown
-		addon.Activity("Writing plan %q to %s (%d bytes user content + %d bytes preamble).",
-			d.Plan.Name, planPath, len(d.Plan.Markdown), len(nonInteractivePreamble))
+		manifest, skillsN, memoriesN := buildSyncedAssetsSection(SourceDir)
+		addon.Activity("Synced asset manifest: %d skill(s), %d memorie(s) under %s/.goose.",
+			skillsN, memoriesN, SourceDir)
+		planBody := preambleIntro + manifest + userPlanHeader + d.Plan.Markdown
+		addon.Activity("Writing plan %q to %s (%d bytes user content + %d bytes preamble + %d bytes manifest).",
+			d.Plan.Name, planPath, len(d.Plan.Markdown),
+			len(preambleIntro)+len(userPlanHeader), len(manifest))
 		if err = os.WriteFile(planPath, []byte(planBody), 0644); err != nil {
 			return fmt.Errorf("writing plan markdown: %w", err)
 		}
@@ -296,3 +306,158 @@ func runOpenCode(model string, hubEnv []string, planFile string) error {
 	return run(SourceDir, hubEnv, "opencode", args...)
 }
 
+// buildSyncedAssetsSection enumerates the skills and memories that pallet
+// synced into workDir/.goose/ and returns a markdown manifest naming each one
+// for the agent. Goose has no conditional skill loader, so without this
+// manifest the synced files are invisible to the model. Returns "" with zero
+// counts when nothing was synced.
+func buildSyncedAssetsSection(workDir string) (manifest string, skillsCount, memoriesCount int) {
+	skillsDir := filepath.Join(workDir, ".goose", "skills")
+	memoriesDir := filepath.Join(workDir, ".goose", "memories")
+
+	skills := readSyncedSkills(skillsDir)
+	memories := readSyncedMemories(memoriesDir)
+	skillsCount = len(skills)
+	memoriesCount = len(memories)
+	if skillsCount == 0 && memoriesCount == 0 {
+		return "", 0, 0
+	}
+
+	var b strings.Builder
+	b.WriteString("# Available skills and memories (synced by pallet)\n\n")
+	b.WriteString("The files listed below were synced into this workspace before you started.\n")
+	b.WriteString("They contain authoritative guidance for this task. Read any whose name or\n")
+	b.WriteString("description matches the work in the user plan before acting; do NOT skip a\n")
+	b.WriteString("skill whose description matches the task at hand.\n\n")
+
+	if len(skills) > 0 {
+		b.WriteString("## Skills (read the SKILL.md if relevant)\n\n")
+		for _, s := range skills {
+			fmt.Fprintf(&b, "- **%s** — %s (`%s`)\n", s.name, s.description, s.relPath)
+		}
+		b.WriteString("\n")
+	}
+	if len(memories) > 0 {
+		b.WriteString("## Memories / rules (read in full before acting)\n\n")
+		for _, m := range memories {
+			fmt.Fprintf(&b, "- `%s`\n", m)
+		}
+		b.WriteString("\n")
+	}
+	return b.String(), skillsCount, memoriesCount
+}
+
+type syncedSkill struct {
+	name        string
+	description string
+	relPath     string
+}
+
+func readSyncedSkills(skillsDir string) []syncedSkill {
+	entries, err := os.ReadDir(skillsDir)
+	if err != nil {
+		return nil
+	}
+	var out []syncedSkill
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		skillFile := filepath.Join(skillsDir, e.Name(), "SKILL.md")
+		name, desc := parseSkillFrontmatter(skillFile)
+		if name == "" {
+			name = e.Name()
+		}
+		if desc == "" {
+			desc = "(no description)"
+		}
+		rel := filepath.Join(".goose", "skills", e.Name(), "SKILL.md")
+		out = append(out, syncedSkill{name: name, description: desc, relPath: rel})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
+	return out
+}
+
+func readSyncedMemories(memoriesDir string) []string {
+	entries, err := os.ReadDir(memoriesDir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		out = append(out, filepath.Join(".goose", "memories", e.Name()))
+	}
+	sort.Strings(out)
+	return out
+}
+
+// parseSkillFrontmatter reads the leading `---` YAML block of a SKILL.md and
+// extracts the `name` and `description` fields. Pallet writes Agent-Skills-
+// formatted SKILL.md files with frontmatter intact, so a tiny line scanner is
+// enough — no YAML dependency. Description values that span multiple lines
+// (folded `>` style) are joined with single spaces.
+func parseSkillFrontmatter(path string) (name, description string) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", ""
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+
+	if !scanner.Scan() || strings.TrimSpace(scanner.Text()) != "---" {
+		return "", ""
+	}
+	var (
+		curKey  string
+		descBuf []string
+	)
+	for scanner.Scan() {
+		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "---" {
+			break
+		}
+		if isFrontmatterKey(line) {
+			key, val := splitFrontmatterKey(line)
+			curKey = key
+			switch key {
+			case "name":
+				name = strings.Trim(val, "\"' ")
+			case "description":
+				v := strings.TrimSpace(strings.TrimPrefix(val, ">"))
+				v = strings.Trim(v, "\"'")
+				if v != "" {
+					descBuf = append(descBuf, v)
+				}
+			}
+			continue
+		}
+		if curKey == "description" && trimmed != "" {
+			descBuf = append(descBuf, trimmed)
+		}
+	}
+	description = strings.Join(descBuf, " ")
+	return name, description
+}
+
+// isFrontmatterKey reports whether a line begins a top-level YAML mapping
+// entry (e.g. "name: foo"). Indented continuation lines do not count.
+func isFrontmatterKey(line string) bool {
+	if line == "" || line[0] == ' ' || line[0] == '\t' || line[0] == '#' {
+		return false
+	}
+	idx := strings.Index(line, ":")
+	return idx > 0
+}
+
+func splitFrontmatterKey(line string) (key, val string) {
+	idx := strings.Index(line, ":")
+	if idx < 0 {
+		return "", ""
+	}
+	return strings.TrimSpace(line[:idx]), strings.TrimSpace(line[idx+1:])
+}
