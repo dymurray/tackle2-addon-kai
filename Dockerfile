@@ -4,23 +4,26 @@ ENV GOPATH=$APP_ROOT
 COPY --chown=1001:0 . .
 RUN make cmd
 
-# --- Stage 2: Build pallet from source as a static (musl) binary.
-# The upstream pallet-linux-amd64 release asset is dynamically linked against
-# glibc >= 2.39 (Ubuntu 24.04 build host), which is too new for ubi9
-# (glibc 2.34). Pallet uses rustls (no native OpenSSL), so it compiles cleanly
-# for x86_64-unknown-linux-musl into a fully static binary.
-FROM docker.io/library/rust:1.86 AS pallet-builder
+# --- Stage 2: Build pallet on UBI9 so it links against the same glibc (2.34)
+# as the runtime image. The upstream release asset targets glibc >= 2.39.
+FROM registry.access.redhat.com/ubi9/ubi-minimal:latest AS pallet-builder
 ARG PALLET_VERSION=0.0.5
-RUN apt-get update && apt-get install -y --no-install-recommends musl-tools \
- && rm -rf /var/lib/apt/lists/* \
- && rustup target add x86_64-unknown-linux-musl
+RUN echo -e "[centos9-appstream]" \
+ "\nname = CentOS Stream 9 - AppStream" \
+ "\nbaseurl = http://mirror.stream.centos.org/9-stream/AppStream/\$basearch/os/" \
+ "\nenabled = 1" \
+ "\ngpgcheck = 0" \
+ "\n" \
+ "\n[centos9-baseos]" \
+ "\nname = CentOS Stream 9 - BaseOS" \
+ "\nbaseurl = http://mirror.stream.centos.org/9-stream/BaseOS/\$basearch/os/" \
+ "\nenabled = 1" \
+ "\ngpgcheck = 0" > /etc/yum.repos.d/centos.repo
+RUN microdnf -y install rust cargo gcc make && microdnf clean all
 WORKDIR /src
 RUN curl -fsSL "https://github.com/djzager/pallet/archive/refs/tags/v${PALLET_VERSION}.tar.gz" \
       | tar -xz --strip-components=1
-ENV CC_x86_64_unknown_linux_musl=musl-gcc
-RUN RUSTFLAGS='-C linker=musl-gcc -C target-feature=+crt-static' \
-    cargo build --release --target x86_64-unknown-linux-musl \
- && ! ldd target/x86_64-unknown-linux-musl/release/pallet 2>&1 | grep -q "libc.so"
+RUN cargo build --release
 
 # --- Stage 3: Runtime ---
 FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
@@ -73,8 +76,7 @@ ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
 ENV DOTNET_NOLOGO=1
 
-# Install goose and opencode from release binaries; pallet comes from
-# the pallet-builder stage (built static against musl).
+# Install goose and opencode from release binaries.
 ARG GOOSE_VERSION=1.23.2
 ARG OPENCODE_VERSION=0.0.55
 RUN microdnf -y install bzip2 && \
@@ -84,7 +86,7 @@ RUN microdnf -y install bzip2 && \
       | tar -xz -C /usr/bin opencode && \
     microdnf -y remove bzip2 && microdnf clean all
 
-COPY --from=pallet-builder /src/target/x86_64-unknown-linux-musl/release/pallet /usr/bin/pallet
+COPY --from=pallet-builder /src/target/release/pallet /usr/bin/pallet
 RUN chmod +x /usr/bin/pallet
 
 # Addon user
