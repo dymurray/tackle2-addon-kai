@@ -19,7 +19,7 @@ RUN echo -e "[centos9-appstream]" \
  "\nbaseurl = http://mirror.stream.centos.org/9-stream/BaseOS/\$basearch/os/" \
  "\nenabled = 1" \
  "\ngpgcheck = 0" > /etc/yum.repos.d/centos.repo
-RUN microdnf -y install rust cargo gcc make && microdnf clean all
+RUN microdnf -y install rust cargo gcc make tar && microdnf clean all
 WORKDIR /src
 RUN curl -fsSL "https://github.com/djzager/pallet/archive/refs/tags/v${PALLET_VERSION}.tar.gz" \
       | tar -xz --strip-components=1
