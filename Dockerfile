@@ -9,7 +9,7 @@ RUN make cmd
 # glibc >= 2.39 (Ubuntu 24.04 build host), which is too new for ubi9
 # (glibc 2.34). Pallet uses rustls (no native OpenSSL), so it compiles cleanly
 # for x86_64-unknown-linux-musl into a fully static binary.
-FROM docker.io/library/rust:1.83 AS pallet-builder
+FROM docker.io/library/rust:1.86 AS pallet-builder
 ARG PALLET_VERSION=0.0.5
 RUN apt-get update && apt-get install -y --no-install-recommends musl-tools \
  && rm -rf /var/lib/apt/lists/* \
