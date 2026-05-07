@@ -1,6 +1,6 @@
 module github.com/dymurray/tackle2-addon-kai
 
-go 1.21
+go 1.22
 
 require (
 	github.com/konveyor/tackle2-addon v0.8.0-beta.4

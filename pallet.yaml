@@ -1,0 +1,19 @@
+sources:
+  - name: commit-and-doc-standards
+    type: git
+    url: https://github.com/mrz1836/go-template
+    ref: master
+    paths:
+      - .github/tech-conventions/commit-branch-conventions.md
+      - .github/tech-conventions/commenting-documentation.md
+
+  - name: coding-conventions
+    type: git
+    url: https://github.com/mrz1836/go-template
+    ref: master
+    paths:
+      - .github.com/tech-conventions/go-essentials.md
+      - .github.com/tech-conventions/testing-standards.md
+
+agents:
+  auto_detect: true
