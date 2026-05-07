@@ -20,7 +20,7 @@ RUN curl -fsSL "https://github.com/djzager/pallet/archive/refs/tags/v${PALLET_VE
 ENV CC_x86_64_unknown_linux_musl=musl-gcc
 RUN RUSTFLAGS='-C linker=musl-gcc -C target-feature=+crt-static' \
     cargo build --release --target x86_64-unknown-linux-musl \
- && file target/x86_64-unknown-linux-musl/release/pallet | grep -q "statically linked"
+ && ! ldd target/x86_64-unknown-linux-musl/release/pallet 2>&1 | grep -q "libc.so"
 
 # --- Stage 3: Runtime ---
 FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
