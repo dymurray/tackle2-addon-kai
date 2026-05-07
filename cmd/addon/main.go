@@ -15,7 +15,10 @@ import (
 )
 
 var (
-	addon     = hub.Addon
+	// Global addon instance
+	addon = hub.Addon
+	
+	// Directory paths
 	Dir       = ""
 	SourceDir = ""
 
