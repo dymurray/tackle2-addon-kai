@@ -1,0 +1,81 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mempalace-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mempalace
+  labels:
+    app: mempalace
+    app.kubernetes.io/part-of: mta
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mempalace
+  template:
+    metadata:
+      labels:
+        app: mempalace
+    spec:
+      containers:
+        - name: mempalace
+          image: quay.io/pranavgaikwad/mempalace-runner:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+          env:
+            - name: MEMPALACE_PALACE_PATH
+              value: /data/palace
+            - name: HOME
+              value: /data
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mempalace-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mempalace
+  labels:
+    app: mempalace
+    app.kubernetes.io/part-of: mta
+spec:
+  selector:
+    app: mempalace
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP

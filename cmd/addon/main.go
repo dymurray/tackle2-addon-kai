@@ -22,8 +22,9 @@ var (
 	Dir       = ""
 	SourceDir = ""
 
-	PalletBin = "/usr/bin/pallet"
-	GooseBin  = "/usr/bin/goose"
+	PalletBin     = "/usr/bin/pallet"
+	GooseBin      = "/usr/bin/goose"
+	GooseHintsSrc = "/usr/share/goosehints"
 )
 
 // preambleIntro is prepended to every plan before it is handed to the AI
@@ -187,6 +188,10 @@ func main() {
 			fmt.Sprintf("APP_ID=%d", application.ID),
 		}
 
+		if hints, readErr := os.ReadFile(GooseHintsSrc); readErr == nil {
+			os.WriteFile(path.Join(SourceDir, ".goosehints"), hints, 0644)
+		}
+
 		addon.Activity("Running migration agent (%s) on plan %q.", agentName, d.Plan.Name)
 		err = RunAgent(agentName, provider, model, hubEnv, planPath)
 		if err != nil {
@@ -263,16 +268,18 @@ func RunAgent(agentName, provider, model string, hubEnv []string, planFile strin
 	}
 }
 
+var MempalaceURL = os.Getenv("MEMPALACE_URL")
+
 func runGoose(provider, model string, hubEnv []string, planFile string) error {
 	args := []string{
 		"run",
-		"--no-profile",
 		"--no-session",
-		// `developer` provides file read/write/edit and shell exec — without
-		// at least one extension goose has no tools and exits with an "I notice
-		// that no extensions are currently enabled" apology.
+		"--no-profile",
 		"--with-builtin", "developer",
 		"-i", planFile,
+	}
+	if MempalaceURL != "" {
+		args = append(args, "--with-streamable-http-extension", MempalaceURL)
 	}
 	if provider != "" {
 		args = append(args, "--provider", provider)
