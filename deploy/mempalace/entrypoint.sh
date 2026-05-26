@@ -19,4 +19,6 @@ exec supergateway \
     --stdio "python3 -m mempalace.mcp_server --palace $PALACE_PATH" \
     --port 8080 \
     --outputTransport streamableHttp \
+    --stateful \
+    --sessionTimeout 600000 \
     --healthEndpoint /healthz

@@ -1,5 +1,7 @@
 You have persistent memory via the mempalace MCP extension. Use it to build a cumulative knowledge base that helps future agents perform the same type of migration faster and with fewer errors.
 
+**IMPORTANT: Call all mempalace tools directly in this session. Do NOT delegate mempalace calls to subagents — subagents cannot access the mempalace MCP connection. Every mempalace_* tool call must happen in your main conversation, not via summon or any subagent.**
+
 ### Session Start
 
 1. Call `mempalace_status` to load the palace overview.
