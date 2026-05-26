@@ -59,10 +59,19 @@ type Data struct {
 }
 
 type AgentConfig struct {
-	Name        string            `json:"name"`
-	Description string            `json:"description,omitempty"`
-	Pallet      *PalletConfig     `json:"pallet,omitempty"`
-	ModelConfig *AgentModelConfig `json:"modelConfig,omitempty"`
+	Name        string             `json:"name"`
+	Description string             `json:"description,omitempty"`
+	Pallet      *PalletConfig      `json:"pallet,omitempty"`
+	ModelConfig *AgentModelConfig  `json:"modelConfig,omitempty"`
+	SubRecipes  []SubrecipeConfig  `json:"subRecipes,omitempty"`
+}
+
+type SubrecipeConfig struct {
+	Name         string            `json:"name"`
+	Description  string            `json:"description,omitempty"`
+	Instructions string            `json:"instructions"`
+	Order        int               `json:"order"`
+	ModelConfig  *AgentModelConfig `json:"modelConfig,omitempty"`
 }
 
 type AgentModelConfig struct {
@@ -192,8 +201,19 @@ func main() {
 			os.WriteFile(path.Join(SourceDir, ".goosehints"), hints, 0644)
 		}
 
-		addon.Activity("Running migration agent (%s) on plan %q.", agentName, d.Plan.Name)
-		err = RunAgent(agentName, provider, model, hubEnv, planPath)
+		if len(d.Agent.SubRecipes) > 0 {
+			addon.Activity("Agent has %d sub-recipe(s); generating Goose recipe YAML.", len(d.Agent.SubRecipes))
+			recipePath, genErr := generateRecipeFiles(d, planBody, provider, model, SourceDir)
+			if genErr != nil {
+				return fmt.Errorf("generating recipe files: %w", genErr)
+			}
+			providerEnvVars := collectProviderEnvVars(d)
+			addon.Activity("Running migration agent (%s) with recipe %s.", agentName, recipePath)
+			err = runGooseWithRecipe(hubEnv, recipePath, providerEnvVars)
+		} else {
+			addon.Activity("Running migration agent (%s) on plan %q.", agentName, d.Plan.Name)
+			err = RunAgent(agentName, provider, model, hubEnv, planPath)
+		}
 		if err != nil {
 			return
 		}
@@ -294,6 +314,25 @@ func runGoose(provider, model string, hubEnv []string, planFile string) error {
 		"NO_COLOR=1",
 		"TERM=dumb",
 	}, hubEnv...)
+	return run(SourceDir, env, GooseBin, args...)
+}
+
+func runGooseWithRecipe(hubEnv []string, recipePath string, providerEnvVars []string) error {
+	args := []string{
+		"run",
+		"--no-session",
+		"--no-profile",
+		"--recipe", recipePath,
+	}
+	if MempalaceURL != "" {
+		args = append(args, "--with-streamable-http-extension", MempalaceURL)
+	}
+	env := append([]string{
+		"GOOSE_MODE=auto",
+		"NO_COLOR=1",
+		"TERM=dumb",
+	}, hubEnv...)
+	env = append(env, providerEnvVars...)
 	return run(SourceDir, env, GooseBin, args...)
 }
 
