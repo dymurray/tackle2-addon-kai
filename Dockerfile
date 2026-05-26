@@ -102,6 +102,8 @@ COPY --from=addon $GOPATH/src/bin/fetch-analysis /usr/bin/fetch-analysis
 # Copy bundled skills
 COPY skills/ /addon/skills/
 
+COPY deploy/goosehints /usr/share/goosehints
+
 ENV HOME=/addon ADDON=/addon
 WORKDIR /addon
 USER 1001

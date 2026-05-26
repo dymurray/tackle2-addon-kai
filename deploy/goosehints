@@ -1,0 +1,87 @@
+You have persistent memory via the mempalace MCP extension. Use it to build a cumulative knowledge base that helps future agents perform the same type of migration faster and with fewer errors.
+
+**IMPORTANT: Call all mempalace tools directly in this session. Do NOT delegate mempalace calls to subagents — subagents cannot access the mempalace MCP connection. Every mempalace_* tool call must happen in your main conversation, not via summon or any subagent.**
+
+### Session Start
+
+1. Call `mempalace_status` to load the palace overview.
+2. Identify the migration path from the workspace (e.g., source and target framework versions from package.json, pom.xml, or equivalent).
+3. Call `mempalace_get_taxonomy` to see what knowledge already exists for this migration path.
+4. Call `mempalace_diary_read` with `agent_name="migration-agent"` and `wing=wing_<app-name>` to load prior session history for this application.
+
+### Knowledge Organization
+
+**Migration path wings** are named `wing_<source>-to-<target>` (e.g., `wing_pf5-to-pf6`, `wing_react17-to-18`, `wing_java11-to-17`). These contain reusable knowledge applicable across all applications on the same migration path.
+
+Each migration path wing has these rooms:
+
+- **`patterns`** — API replacement patterns (old API -> new API with code examples)
+- **`behaviors`** — Silent changes that compile but behave differently at runtime or in tests
+- **`testing`** — Test adaptation patterns (query changes, selector changes, assertion changes)
+- **`dependencies`** — Package renames, splits, merges, new peer dependencies
+- **`pitfalls`** — Approaches that look correct but don't work, where the agent's choice was wrong (not a framework behavior change)
+- **`environment`** — Build toolchain quirks, test runner differences, container limitations
+
+**Application wings** are named `wing_<app-name>`. These track per-application migration progress via diary entries.
+
+### What to Store in Drawers
+
+**Always store:**
+
+- API replacement patterns — when you rewrite code from old API to new, store the before/after with a minimal code snippet. Include import changes, structural changes, and any props/arguments that changed semantics. Write enough detail that an agent unfamiliar with the API can apply the pattern directly.
+- Silent behavioral changes — anything that compiles without errors but behaves differently. Include: what changed, what symptom it causes in tests or at runtime, how to detect it, and how to fix it.
+- Test adaptation patterns — when a test fails due to migration changes, store the error message or symptom alongside the fix. Future agents will search by error message.
+- Dependency changes — packages renamed, removed, split, or requiring new peer dependencies. Include old and new names, import path changes, and note when error messages are misleading.
+- Mistakes you tried that didn't work — if you attempted a fix that failed, store what you tried and why it was wrong. This prevents future agents from repeating the same mistake.
+- Build or toolchain quirks — differences between type-checking and actual build, test runner flag changes, environment-specific issues.
+
+**Do NOT store:**
+
+- Routine type-error fixes where the compiler error message already describes the solution. If the error says "Property X does not exist on type Y", the next agent will get the same error and the same information.
+- Project-specific file paths or variable names. Store patterns, not instances.
+
+### What to Store in the Knowledge Graph
+
+Use the knowledge graph for structured API mappings that agents will look up by exact entity name. Store triples for:
+
+- Component/class renames: `OldName --renamed_to--> NewName`
+- Import/package path changes: `old/import/path --import_moved_to--> new/import/path`
+- Property/method renames: `Component.oldProp --prop_replaced_by--> Component.newProp`
+- Package renames or merges: `old-package --package_merged_into--> new-package`
+- Minimum version requirements: `package@newVersion --requires_minimum--> dependency@minVersion`
+
+Include `valid_from` with the target framework version or release date. When a fact becomes outdated, call `mempalace_kg_invalidate` before adding the corrected triple.
+
+### How to Store Drawers
+
+- Store after completing each logical group of fixes — not per file, not only at session end.
+- Call `mempalace_check_duplicate` before every `mempalace_add_drawer` call.
+- Include the error symptom or message in every entry — this is what future agents will search for.
+- Write each entry as self-contained. It should be understandable without reading other entries.
+- Prefer concrete code snippets over abstract descriptions.
+- Keep each entry under 700 characters. If a pattern requires a longer explanation, split into separate entries: one for symptom and root cause, one for the fix with code.
+- Include the specific version so future agents can judge whether the entry is still relevant.
+- Format entries as: symptom/error -> root cause -> fix with code example.
+
+### Searching Before Acting
+
+Before debugging any error or test failure:
+
+1. Call `mempalace_search` with the error message or symptom, scoped to the migration path wing.
+2. Call `mempalace_kg_query` with the entity name (component, package, or API) to check for known renames, moves, or replacements.
+
+A prior migration may have already solved the same issue.
+
+### Session End
+
+1. Write a diary entry summarizing the session's work:
+   ```
+   mempalace_diary_write(
+     agent_name="migration-agent",
+     entry="<what was done, what was discovered, what's blocked>",
+     topic="<app-name>",
+     wing="wing_<app-name>"
+   )
+   ```
+   Keep the entry concise. Include: components migrated, issues hit, what remains.
+2. Review your fixes and ensure all non-trivial discoveries are stored in the migration path wing. If you discovered something during fixing that you didn't store inline, store it now.
